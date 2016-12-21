@@ -34,7 +34,6 @@ type Exporter struct {
 	duration     prometheus.Gauge
 	scrapeErrors prometheus.Gauge
 	totalScrapes prometheus.Counter
-	redisUp      *prometheus.GaugeVec
 	metrics      map[string]*prometheus.GaugeVec
 	metricsMtx   sync.RWMutex
 	sync.RWMutex
@@ -164,11 +163,6 @@ func NewRedisExporter(host RedisHost, namespace, checkKeys string) (*Exporter, e
 			Name:      "exporter_last_scrape_error",
 			Help:      "The last scrape error status.",
 		}),
-		redisUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-			Namespace: namespace,
-			Name:      "up",
-			Help:      "Whether the Redis server is up.",
-		}, []string{"addr"}),
 	}
 	for _, k := range strings.Split(checkKeys, ",") {
 		var err error
@@ -230,7 +224,6 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	ch <- e.totalScrapes
 	ch <- e.scrapeErrors
 	e.collectMetrics(ch)
-	e.redisUp.Collect(ch)
 }
 
 func includeMetric(s string) bool {
@@ -417,7 +410,6 @@ func (e *Exporter) scrape(scrapes chan<- scrapeResult) {
 		var err error
 
 		scrapes <- scrapeResult{Name: "up", Addr: addr, Value: 0}
-		var labels prometheus.Labels = map[string]string{"addr": addr}
 
 		var options []redis.DialOption
 		if len(e.redis.Passwords) > idx && e.redis.Passwords[idx] != "" {
@@ -440,7 +432,6 @@ func (e *Exporter) scrape(scrapes chan<- scrapeResult) {
 		if err != nil {
 			log.Printf("redis err: %s", err)
 			errorCount++
-			e.redisUp.With(labels).Set(0)
 			continue
 		}
 		defer c.Close()
@@ -453,12 +444,10 @@ func (e *Exporter) scrape(scrapes chan<- scrapeResult) {
 		if err != nil {
 			log.Printf("redis err: %s", err)
 			errorCount++
-			e.redisUp.With(labels).Set(0)
 			continue
 		}
 
 		scrapes <- scrapeResult{Name: "up", Addr: addr, Value: 1}
-		e.redisUp.With(labels).Set(1)
 
 		if config, err := redis.Strings(c.Do("CONFIG", "GET", "maxmemory")); err == nil {
 			extractConfigMetrics(config, addr, scrapes)
