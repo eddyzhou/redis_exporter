@@ -5,16 +5,19 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	log "github.com/Sirupsen/logrus"
-	"github.com/oliver006/redis_exporter/exporter"
+	"github.com/eddyzhou/redis_exporter/exporter"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
 	redisAddr     = flag.String("redis.addr", getEnv("REDIS_ADDR", "redis://localhost:6379"), "Address of one or more redis nodes, separated by separator")
 	redisPassword = flag.String("redis.password", getEnv("REDIS_PASSWORD", ""), "Password for one or more redis nodes, separated by separator")
+	scrapeTimeout = flag.String("redis.scrape-timeout", getEnv("REDIS_SCRAPE_TIMEOUT", ""), "ScrapeTimeout(second) for one or more redis nodes, separated by separator")
 	namespace     = flag.String("namespace", "redis", "Namespace for metrics")
 	checkKeys     = flag.String("check-keys", "", "Comma separated list of keys to export value and length/size")
 	separator     = flag.String("separator", ",", "separator used to split redis.addr and redis.password into several elements.")
@@ -28,6 +31,8 @@ var (
 	VERSION     = "<<< filled in by build >>>"
 	BUILD_DATE  = "<<< filled in by build >>>"
 	COMMIT_SHA1 = "<<< filled in by build >>>"
+
+	DefaultScrapeTimeout = time.Duration(5) * time.Second
 )
 
 func main() {
@@ -55,9 +60,21 @@ func main() {
 	for len(passwords) < len(addrs) {
 		passwords = append(passwords, passwords[0])
 	}
+	scapeTimeouts := make([]time.Duration, len(addrs))
+	timeouts := strings.Split(*scrapeTimeout, *separator)
+	for i, v := range timeouts {
+		if iv, err := strconv.Atoi(v); err == nil {
+			scapeTimeouts[i] = time.Duration(iv) * time.Second
+		} else {
+			scapeTimeouts[i] = DefaultScrapeTimeout
+		}
+	}
+	for i := len(timeouts); i < len(addrs); i++ {
+		scapeTimeouts[i] = DefaultScrapeTimeout
+	}
 
 	exp, err := exporter.NewRedisExporter(
-		exporter.RedisHost{Addrs: addrs, Passwords: passwords},
+		exporter.RedisHost{Addrs: addrs, Passwords: passwords, ScrapeTimeouts: scapeTimeouts},
 		*namespace,
 		*checkKeys)
 	if err != nil {

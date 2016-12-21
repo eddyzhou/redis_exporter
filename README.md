@@ -58,10 +58,11 @@ These settings take precedence over any configurations provided by [environment 
 
 ### Environment Variables
 
-Name               | Description
--------------------|------------
-REDIS_ADDR         | Address of Redis node(s)
-REDIS_PASSWORD     | Password to use when authenticating to Redis
+Name                     | Description
+-------------------------|------------
+REDIS_ADDR               | Address of Redis node(s)
+REDIS_PASSWORD           | Password to use when authenticating to Redis
+REDIS_SCRAPE_TIMEOUT     | Time(second) to get Redis info
 
 ### What's exported?
 
