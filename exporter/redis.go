@@ -164,11 +164,11 @@ func NewRedisExporter(host RedisHost, namespace, checkKeys string) (*Exporter, e
 			Name:      "exporter_last_scrape_error",
 			Help:      "The last scrape error status.",
 		}),
-		redisUp: prometheus.NewGauge(prometheus.GaugeOpts{
+		redisUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: namespace,
 			Name:      "up",
 			Help:      "Whether the Redis server is up.",
-		}),
+		}, []string{"addr"}),
 	}
 	for _, k := range strings.Split(checkKeys, ",") {
 		var err error
