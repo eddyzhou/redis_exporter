@@ -44,7 +44,7 @@ const (
 
 func setupDBKeys(t *testing.T) error {
 
-	c, err := redis.DialURL(defaultRedisHost.Addrs[0])
+	c, err := redis.Dial("tcp", defaultRedisHost.Addrs[0])
 	if err != nil {
 		t.Errorf("couldn't setup redis, err: %s ", err)
 		return err
@@ -84,7 +84,7 @@ func setupDBKeys(t *testing.T) error {
 
 func deleteKeysFromDB(t *testing.T) error {
 
-	c, err := redis.DialURL(defaultRedisHost.Addrs[0])
+	c, err := redis.Dial("tcp", defaultRedisHost.Addrs[0])
 	if err != nil {
 		t.Errorf("couldn't setup redis, err: %s ", err)
 		return err
@@ -111,9 +111,9 @@ func deleteKeysFromDB(t *testing.T) error {
 }
 
 func TestHostVariations(t *testing.T) {
-	for _, prefix := range []string{"", "redis://", "tcp://"} {
+	for _, prefix := range []string{"", "tcp://"} {
 		addr := prefix + *redisAddr
-		host := RedisHost{Addrs: []string{addr}}
+		host := RedisHost{Addrs: []string{addr}, ScrapeTimeouts: []time.Duration{time.Duration(5) * time.Second}}
 		e, _ := NewRedisExporter(host, "test", "")
 
 		scrapes := make(chan scrapeResult, 10000)
@@ -380,7 +380,7 @@ func TestHTTPEndpoint(t *testing.T) {
 
 func TestNonExistingHost(t *testing.T) {
 
-	rr := RedisHost{Addrs: []string{"unix:///tmp/doesnt.exist"}}
+	rr := RedisHost{Addrs: []string{"unix:///tmp/doesnt.exist"}, ScrapeTimeouts: []time.Duration{time.Duration(5) * time.Second}}
 	e, _ := NewRedisExporter(rr, "test", "")
 
 	chM := make(chan prometheus.Metric)
@@ -450,5 +450,5 @@ func init() {
 	}
 	log.Printf("Using redis addrs: %#v", addrs)
 
-	defaultRedisHost = RedisHost{Addrs: []string{"redis://" + *redisAddr}}
+	defaultRedisHost = RedisHost{Addrs: []string{*redisAddr}, ScrapeTimeouts: []time.Duration{time.Duration(5) * time.Second}}
 }

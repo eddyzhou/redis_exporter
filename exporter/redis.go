@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
@@ -36,6 +37,7 @@ type Exporter struct {
 	totalScrapes prometheus.Counter
 	metrics      map[string]*prometheus.GaugeVec
 	metricsMtx   sync.RWMutex
+	wg           sync.WaitGroup
 	sync.RWMutex
 }
 
@@ -398,86 +400,94 @@ func extractConfigMetrics(config []string, addr string, scrapes chan<- scrapeRes
 	return nil
 }
 
+func (e *Exporter) scrapeOne(idx int, addr string, scrapes chan<- scrapeResult, errorCount *int32) {
+	defer e.wg.Done()
+
+	var c redis.Conn
+	var err error
+
+	scrapes <- scrapeResult{Name: "up", Addr: addr, Value: 0}
+
+	options := []redis.DialOption{redis.DialWriteTimeout(e.redis.ScrapeTimeouts[idx]), redis.DialReadTimeout(e.redis.ScrapeTimeouts[idx]), redis.DialConnectTimeout(e.redis.ScrapeTimeouts[idx])}
+	if len(e.redis.Passwords) > idx && e.redis.Passwords[idx] != "" {
+		options = append(options, redis.DialPassword(e.redis.Passwords[idx]))
+	}
+
+	log.Debugf("Trying DialURL(): %s", addr)
+	if c, err = redis.DialURL(addr, options...); err != nil {
+		log.Debugf("DialURL() failed, err: %s", err)
+		frags := strings.Split(addr, "://")
+		if len(frags) == 2 {
+			log.Debugf("Trying: Dial(): %s %s", frags[0], frags[1])
+			c, err = redis.Dial(frags[0], frags[1], options...)
+		} else {
+			log.Debugf("Trying: Dial(): tcp %s", addr)
+			c, err = redis.Dial("tcp", addr, options...)
+		}
+	}
+
+	if err != nil {
+		log.Printf("redis err: %s", err)
+		atomic.AddInt32(errorCount, 1)
+		return
+	}
+	defer c.Close()
+	log.Debugf("connected to: %s", addr)
+
+	info, err := redis.String(c.Do("INFO", "ALL"))
+	if err == nil {
+		err = e.extractInfoMetrics(info, addr, scrapes)
+	}
+	if err != nil {
+		log.Printf("redis err: %s", err)
+		atomic.AddInt32(errorCount, 1)
+		return
+	}
+
+	scrapes <- scrapeResult{Name: "up", Addr: addr, Value: 1}
+
+	if config, err := redis.Strings(c.Do("CONFIG", "GET", "maxmemory")); err == nil {
+		extractConfigMetrics(config, addr, scrapes)
+	}
+
+	for _, k := range e.keys {
+		if _, err := c.Do("SELECT", k.db); err != nil {
+			continue
+		}
+		if tempVal, err := c.Do("GET", k.key); err == nil && tempVal != nil {
+			if val, err := strconv.ParseFloat(fmt.Sprintf("%s", tempVal), 64); err == nil {
+				e.keyValues.WithLabelValues("db"+k.db, k.key).Set(val)
+			}
+		}
+
+		for _, op := range []string{
+			"HLEN",
+			"LLEN",
+			"SCARD",
+			"ZCARD",
+			"PFCOUNT",
+			"STRLEN",
+		} {
+			if tempVal, err := c.Do(op, k.key); err == nil && tempVal != nil {
+				e.keySizes.WithLabelValues("db"+k.db, k.key).Set(float64(tempVal.(int64)))
+				break
+			}
+		}
+	}
+}
+
 func (e *Exporter) scrape(scrapes chan<- scrapeResult) {
 
 	defer close(scrapes)
 	now := time.Now().UnixNano()
 	e.totalScrapes.Inc()
 
-	errorCount := 0
+	var errorCount int32
 	for idx, addr := range e.redis.Addrs {
-		var c redis.Conn
-		var err error
-
-		scrapes <- scrapeResult{Name: "up", Addr: addr, Value: 0}
-
-		var options []redis.DialOption
-		if len(e.redis.Passwords) > idx && e.redis.Passwords[idx] != "" {
-			options = append(options, redis.DialPassword(e.redis.Passwords[idx]), redis.DialWriteTimeout(e.redis.ScrapeTimeouts[idx]), redis.DialReadTimeout(e.redis.ScrapeTimeouts[idx]), redis.DialConnectTimeout(e.redis.ScrapeTimeouts[idx]))
-		}
-
-		log.Debugf("Trying DialURL(): %s", addr)
-		if c, err = redis.DialURL(addr, options...); err != nil {
-			log.Debugf("DialURL() failed, err: %s", err)
-			frags := strings.Split(addr, "://")
-			if len(frags) == 2 {
-				log.Debugf("Trying: Dial(): %s %s", frags[0], frags[1])
-				c, err = redis.Dial(frags[0], frags[1], options...)
-			} else {
-				log.Debugf("Trying: Dial(): tcp %s", addr)
-				c, err = redis.Dial("tcp", addr, options...)
-			}
-		}
-
-		if err != nil {
-			log.Printf("redis err: %s", err)
-			errorCount++
-			continue
-		}
-		defer c.Close()
-		log.Debugf("connected to: %s", addr)
-
-		info, err := redis.String(c.Do("INFO", "ALL"))
-		if err == nil {
-			err = e.extractInfoMetrics(info, addr, scrapes)
-		}
-		if err != nil {
-			log.Printf("redis err: %s", err)
-			errorCount++
-			continue
-		}
-
-		scrapes <- scrapeResult{Name: "up", Addr: addr, Value: 1}
-
-		if config, err := redis.Strings(c.Do("CONFIG", "GET", "maxmemory")); err == nil {
-			extractConfigMetrics(config, addr, scrapes)
-		}
-
-		for _, k := range e.keys {
-			if _, err := c.Do("SELECT", k.db); err != nil {
-				continue
-			}
-			if tempVal, err := c.Do("GET", k.key); err == nil && tempVal != nil {
-				if val, err := strconv.ParseFloat(fmt.Sprintf("%s", tempVal), 64); err == nil {
-					e.keyValues.WithLabelValues("db"+k.db, k.key).Set(val)
-				}
-			}
-
-			for _, op := range []string{
-				"HLEN",
-				"LLEN",
-				"SCARD",
-				"ZCARD",
-				"PFCOUNT",
-				"STRLEN",
-			} {
-				if tempVal, err := c.Do(op, k.key); err == nil && tempVal != nil {
-					e.keySizes.WithLabelValues("db"+k.db, k.key).Set(float64(tempVal.(int64)))
-					break
-				}
-			}
-		}
+		e.wg.Add(1)
+		go e.scrapeOne(idx, addr, scrapes, &errorCount)
 	}
+	e.wg.Wait()
 
 	e.scrapeErrors.Set(float64(errorCount))
 	e.duration.Set(float64(time.Now().UnixNano()-now) / 1000000000)

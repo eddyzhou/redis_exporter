@@ -32,7 +32,7 @@ var (
 	BUILD_DATE  = "<<< filled in by build >>>"
 	COMMIT_SHA1 = "<<< filled in by build >>>"
 
-	DefaultScrapeTimeout = time.Duration(5) * time.Second
+	DefaultScrapeTimeout = time.Duration(1) * time.Second
 )
 
 func main() {
